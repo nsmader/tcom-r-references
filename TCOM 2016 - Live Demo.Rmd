@@ -1,0 +1,259 @@
+---
+title: "Live Demo of R and Data Use Cases"
+author: "Nick Mader (nmader@chapinhall.org)"
+date: "TCOM Conference -- November 18, 2016"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, error = FALSE, cache = TRUE)
+setwd("C:/Users/nmader/Google Drive/Chapin Hall/Presentations/Praed, TCOM - 2016-11")
+```
+
+# Data Management
+
+## Read Data
+
+R can read from--and write to--just about any data format, allowing users of many different types of software to work together.
+
+```{r read}
+library(readxl)
+d <- read_excel(path = "Dummy CANS Data.xlsx", sheet = 1)
+df <- as.data.frame(d)
+```
+
+## Examine Data
+
+```{r examine}
+# The str() function examines the structure of data
+# (The "#" at the beginning of a line of code creates a "comment",
+#  i.e. plain English that we can use to describe the rationale for
+#  the steps that we take.)
+str(df)
+```
+
+
+## Filter Data
+
+Given the size of the data, let's first pick a subset of rows and columns to focus on to have a simple set of output to work with for our demo. The code below selects rows which correspond to initial assessments, and select columns for youth ID, age, number of episode, and any column that starts with "risk".
+
+After subsetting, we can use the function `dim()` to print information about the number of rows and columns in the data.
+
+```{r filter}
+sub <- subset(df,
+              subset = typeofassess == "CANS  5to18 Initial Assessment",
+              select = c("youthID", "age", "episode", "gender", grep("^risk", colnames(d), value = TRUE)))
+dim(sub) 
+```
+
+We might start examining the data by using the `head()` function to examine the first several cases at the top of a data set. (Unsurprisingly, the `tail()` function shows a handful of cases at the bottom!)
+
+```{r examine with head}
+head(sub)
+```
+
+Now we can continue to examine the data set by getting a summary of column values. The `summary()` function smartly summarizes the data in each column, based on the type of information it contains. 
+
+```{r examine with summary}
+summary(sub)
+```
+
+We see that the `gender` column is listed as being stored as a "character". We can change that to a "`factor`" data type to reflect the fact that we expect only certain set of values, and want to prevent other values from getting written into that column
+
+A column's address is given as `<data table>$<column name>` and assignments can be made using the left arrow `<-`.
+
+```{r convert gender to factor}
+sub$gender <- factor(sub$gender)
+summary(sub)
+```
+
+We can see that R is now smartly treating the `gender` column as categorical and gives us a more helpful summary.
+
+## Reshape Data
+
+In a [great article](https://www.jstatsoft.org/article/view/v059i10), Hadley Wickham (hero developer of R) describes the value of creating "tidy" datasets. In brief, he recommends creating data tables where each row corresponds to the fundamental until of analysis, and all relevant contextual information is stored in columns.
+
+Our current data structure is at the youth-by-episode level, where several personal characteristics (i.e. age and race) and risk scores being across columns provides context for that youth-by-episode assessment. However, my plan is to examine separate CANS item scores and how they are contextualized by the youth that they are related to.
+
+We use the `reshape2` package to reshape our data. As input, we tell the `melt()` function (which converts data to "long" format) which data set we want to melt (i.e. `sub` instead of `df`) and which variables define the "id" columns we want to preserve.
+
+```{r reshape}
+library(reshape2)
+sub_long <- melt(sub,
+                 id.vars = c("youthID", "age", "episode", "gender"))
+head(sub_long)
+dim(sub_long)
+```
+
+Here, we can confirm that there's a new structure, and can see that our data did get much longer.
+
+## Create Classifications
+
+Let's create a new column that indicates whether an item is actionable.
+
+```{r classify}
+sub_long$actionable <- sub_long$value >= 2
+summary(sub_long$actionable)
+```
+
+Rather than store the values as "logical" TRUE/FALSE values, we can also convert the values to be numeric, i.e. 1 vs 0.
+
+```{r classify as num}
+sub_long$actionable <- as.numeric(sub_long$actionable)
+mean(sub_long$actionable)
+```
+
+A 1 vs 0 format is handier when, for instance, we can take the `mean()` of that column to obtain the percentage of scored items that were a value of 1.
+
+When generating reports, we can also embed R expressions in plain English. For example, the calculated percentage of items that are actionable is `r sprintf("%.1f%%", 100*mean(sub_long$actionable))`. (But you'd have to look at the .Rmd file to see how this number was embedded!)
+
+# Data Analysis
+
+## Descriptive Summaries
+
+Building on the `summary()` and `mean()` functions that we used to examine the data, let's create a few more interesting looks at the data.
+
+First, we can use the `aggregate()` function and "formula" `actionable ~ variable`--which translates to roughly "analyze `actionable` based on `variable`"--to look at the mean actionability by item. Replacing `mean` with `sum` below would return the count of actionable items.
+
+```{r describe actionability by variable}
+avgAct_byItem <- aggregate(actionable ~ variable,
+                           data = sub_long,
+                           FUN = mean)
+print(avgAct_byItem)
+```
+
+We can create an additional level of calculation by adding another variable to our formula. Note that the order of the variables on the right-hand side of the formula affects how the output values are sorted.
+
+```{r describe actionability by two variables}
+avgAct_byItemAndGender <- aggregate(actionable ~ gender + variable,
+                                    data = sub_long,
+                                    FUN = mean)
+print(avgAct_byItemAndGender)
+```
+
+## Regression Analysis
+
+Running a simple regression to demonstrate the easy of syntax. The `lm()` function runs a "l"inear "m"odel for us, where we only need to specify the formula that defines our analysis, and name which data set to use.
+
+```{r regress}
+reg <- lm(actionable ~ gender + age + variable,
+          data = sub_long)
+regsum <- summary(reg)
+print(regsum)
+```
+
+Note that the first line below assigns the results of the regression to an object called `reg`. As an object, it is not simply a 2x2 table, but a richer way of storing many types of information that allows us to pull out different items of interest. The `regsum` object is even richer.
+
+A few examples of pulling data from these new objects:
+
+```{r get regress stats}
+# Get a list of just the coefficient estimates
+reg$coefficients
+
+# Get a 2x2 table of coefficient estimates with standard errors, t-stats, and p-value
+regsum$coefficients
+
+# Get the r-squared statistic
+regsum$r.squared
+
+```
+
+
+## Trees and Forests
+
+Though fancy-sounding (and conceptually involved), it is straightforward to run a recursive partitioning algorithm to get a "decison tree" that finds combinations of characteristics that are associated with a given outcome. Here, I use the `rpart` package, although there are many different package options that do similar things. (Google will rapidly and easily tell you a lot about what people recommend about different options.)
+
+Note that I also use the `subset()` function "on-the-fly" to focus only on responses to sexual reactivity.
+
+```{r trees}
+library("rpart")
+part <- rpart(value ~ age + gender + episode,
+              data = subset(sub_long,
+                            variable == "risk_sexually_reactive"))
+par(mfrow = c(1,2), xpd = NA) # This is a bit of a technical addition that keeps the display from getting cut off
+plot(part)
+text(part, use.n = TRUE)
+```
+
+
+# Data Visualization
+
+## Graph
+
+These graphs are made using the popular and lovely `ggplot2` package. ("`gg`"" stands for "grammar of graphics". The "`2`" stands, I believe, for the sequel.)
+
+Any simple [Google Images search for "`ggplot2`"](https://www.google.com/search?site=&tbm=isch&source=hp&biw=1600&bih=721&q=ggplot2&oq=ggplot2&gs_l=img.3..0l10.698.1660.0.2396.7.5.0.2.2.0.73.335.5.5.0....0...1ac.1.64.img..0.7.340.4HjfTv9aYxE) will turn up some lovely and diverse plots made using `ggplot2`. Most resulting pages will also offer code samples that you can adapt to create your own versions. For additional inspiration, check out [The R Graph Gallery](https://www.r-graph-gallery.com/) or [Plotly](https://plot.ly/)'s [R Library](https://plot.ly/r/).
+
+
+```{r graph}
+library(ggplot2)
+ggplot(data = avgAct_byItem, aes(x = factor(variable), y = actionable)) +
+  geom_bar(stat = "identity")
+```
+
+And using several options to dress this up:
+
+```{r more nicer graph}
+# The scales package gives us percentage formatting for our axis
+library(scales) 
+
+# This command reorders the values of "variable" to 
+# (It's admittedly a bit technical)
+avgAct_byItem$variable <- factor(avgAct_byItem$variable,
+                                 levels = avgAct_byItem$variable[order(avgAct_byItem$actionable)])
+
+# Set plot code
+ggplot(data = avgAct_byItem, aes(x = variable, y = actionable, fill = actionable)) +
+  geom_bar(stat = "identity") +
+  xlab("CANS Risk Item") + ylab("%") +
+  ggtitle("% of Actionable Scores, by CANS Risk Item") + 
+  scale_y_continuous(labels = percent) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 15),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12))
+```
+
+If you find it intimidating to have to come up with the names for all of these options:
+
+* Remember that there's always Google! Personally, I just used Google to get the angle of the axis text set. A search for "r ggplot legend text angle" got me [this helpful page](http://docs.ggplot2.org/current/theme.html) with many specific examples. (1) Copy, (2) Paste, (3) Modify!
+* Some R users out there created a (free, of course) tool called [`ggedit`](https://www.r-statistics.com/2016/11/ggedit-interactive-ggplot-aesthetic-and-theme-editor/) which lets you edit plots helps you manually select options to get all of the little aesthetics right
+
+Using effectively the same code as above, but where we (1) use `fill = gender` instead of `fill = actionable`; and (2) use `position = "dodge"` to tell `ggplot` to put the bars side-by-side instead of stacked.
+
+```{r more nicer graph with gender}
+# Set plot code
+ggplot(data = avgAct_byItemAndGender, aes(x = variable, y = actionable, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("CANS Risk Item") + ylab("%") +
+  ggtitle("% of Actionable Scores, by CANS Risk Item") + 
+  scale_y_continuous(labels = percent) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 15),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12))
+```
+
+## Map
+
+Because we don't have spatial information in our data set, here's a simple map of where it all happened!
+
+```{r TCOM 2016 map}
+library("leaflet")
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=-74.61176991462708, lat=40.355546291270215, popup="TCOM 2016, with all the <a href = https://www.regonline.com/custImages/410000/411837/TCOM_2016AGENDAFINAL10-5-16AJ.pdf>awesome biz!</a>")
+```
+
+# Disseminate
+
+This document--well, specifically the .Rmd file that generated this output file--can produce either pdf, Word, or html files depending on what `output` option is selected at the top. (If you're seeing this live, Nick will demonstrate.)
+
+This document can also be used to create a batch of reports, by using another piece of code to feed data (and other instructions, if desired) into this. [Here are](http://yihui.name/knitr/demo/stitch/) some functions, thoughts, and examples for that.
+
+R also can be used to create web applications with the [shiny](http://shiny.rstudio.com/) package. Here's an [example of a dashboard](https://nsmader.shinyapps.io/school-day-crime-chi/) that I created to visualize crime around Chicago Public Schools by time of day. Check out the [shiny gallery](http://shiny.rstudio.com/gallery/) for inspiration, and a sense of diversity of the things that can be created. In particular, [this one](http://shiny.rstudio.com/gallery/kmeans-example.html) is one of my favorites, showing how little code--the equivalent of two short e-mails--is needed to make something very cool!
+
